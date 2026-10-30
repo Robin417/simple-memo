@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>간단 메모장</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;color:#222;font-family:system-ui,sans-serif;font-size:16px}main{max-width:600px;margin:40px auto;padding:0 16px}h1{font-size:26px}section,article{border:1px solid #ddd;border-radius:10px;padding:18px;margin:16px 0}label{display:block;margin:12px 0 6px}input,textarea,button{font:inherit}input,textarea{width:100%;padding:10px;border:1px solid #aaa;border-radius:6px}textarea{min-height:130px;resize:vertical}button{padding:10px 16px;margin:10px 8px 0 0;border:1px solid #bbb;border-radius:6px;background:#f5f5f5;cursor:pointer}button:disabled{opacity:.55;cursor:wait}fieldset{border:0;padding:0;margin:0;min-width:0}#status{min-height:24px;overflow-wrap:anywhere}#account,.memo{overflow-wrap:anywhere}.memo{white-space:pre-wrap;margin:0 0 10px}small{color:#666}[hidden]{display:none!important}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body><main>
+<h1>간단 메모장</h1>
+<p id="status" role="status" aria-live="polite">불러오는 중…</p>
+<section id="auth" hidden><form id="authForm"><fieldset id="authFields">
+<label for="email">이메일</label><input id="email" type="email" autocomplete="username" required>
+<label for="password">비밀번호</label><input id="password" type="password" autocomplete="current-password" minlength="6" required>
+<button type="submit">로그인</button><button id="signup" type="button">회원가입</button>
+</fieldset></form></section>
+<section id="app" hidden>
+<p id="account"></p><button id="logout" type="button">로그아웃</button>
+<form id="memoForm"><fieldset id="memoFields">
+<label for="content">메모 내용</label><textarea id="content" maxlength="10000" required></textarea>
+<button type="submit">저장</button>
+</fieldset></form>
+<div id="list" aria-label="내 메모 목록"></div>
+</section>
+</main><script>
+'use strict';
+const $=id=>document.getElementById(id);
+if(!window.supabase){$('status').textContent='연결 도구를 불러오지 못했습니다. 새로고침해 주세요.';}
+else{
+const db=window.supabase.createClient('https://ryrlzccosfsmfsacuvgc.supabase.co','sb_publishable_jiLJ57ABU7x9ka5r4rrUnA_pdbEkHws',{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
+let user=null,busy=false,version=0;
+const say=text=>$('status').textContent=text;
+const errorText=e=>({'Invalid login credentials':'이메일 또는 비밀번호를 확인해 주세요.','Email not confirmed':'이메일 확인이 필요합니다.','User already registered':'이미 가입한 이메일입니다.','Failed to fetch':'연결에 실패했습니다. 잠시 후 다시 시도해 주세요.'}[e.message]||'처리하지 못했습니다: '+e.message);
+function lock(value){busy=value;$('authFields').disabled=value;$('memoFields').disabled=value;$('logout').disabled=value;$('list').querySelectorAll('button').forEach(b=>b.disabled=value);}
+async function load(){
+const current=user,request=++version;
+$('auth').hidden=!!current;$('app').hidden=!current;
+$('list').replaceChildren();
+if(!current){say('로그인하거나 회원가입해 주세요.');return;}
+$('account').textContent=current.email;
+say('불러오는 중…');
+try{
+const {data,error}=await db.from('memos').select('id,content,created_at').eq('user_id',current.id).order('created_at',{ascending:false});
+if(request!==version)return;
+if(error)throw error;
+if(!data.length){const p=document.createElement('p');p.textContent='저장된 메모가 없습니다.';$('list').append(p);}
+for(const memo of data){
+const card=document.createElement('article'),p=document.createElement('p'),time=document.createElement('small'),button=document.createElement('button');
+p.className='memo';p.textContent=memo.content;
+time.textContent=new Date(memo.created_at).toLocaleString('ko-KR');
+button.type='button';button.textContent='삭제';button.setAttribute('aria-label','메모 삭제');
+button.disabled=busy;
+button.addEventListener('click',()=>run('삭제 중…',async()=>{
+const {error}=await db.from('memos').delete().eq('id',memo.id).eq('user_id',current.id);
+if(error)throw error;await load();say('삭제했습니다.');
+}));
+card.append(p,time,document.createElement('br'),button);$('list').append(card);
+}
+say('');
+}catch(e){if(request===version)say(errorText(e));}
+}
+async function run(message,fn){if(busy)return;lock(true);say(message);try{await fn();}catch(e){say(errorText(e));}finally{lock(false);}}
+async function authenticate(signup){
+if(!$('authForm').reportValidity())return;
+await run(signup?'가입 중…':'로그인 중…',async()=>{
+const credentials={email:$('email').value.trim(),password:$('password').value};
+const {data,error}=signup?await db.auth.signUp(credentials):await db.auth.signInWithPassword(credentials);
+if(error)throw error;
+$('password').value='';
+if(!data.session){say('가입을 요청했습니다. 이메일 확인 설정을 확인해 주세요.');return;}
+user=data.user;await load();
+});
+}
+$('authForm').addEventListener('submit',e=>{e.preventDefault();authenticate(false);});
+$('signup').addEventListener('click',()=>authenticate(true));
+$('memoForm').addEventListener('submit',e=>{
+e.preventDefault();if(!user||!$('content').value.trim())return;
+run('저장 중…',async()=>{
+const {error}=await db.from('memos').insert({user_id:user.id,content:$('content').value.trim()});
+if(error)throw error;$('content').value='';await load();say('저장했습니다.');
+});
+});
+$('logout').addEventListener('click',()=>run('로그아웃 중…',async()=>{
+const {error}=await db.auth.signOut();if(error)throw error;
+user=null;$('content').value='';await load();
+}));
+db.auth.onAuthStateChange((event,session)=>{
+if(event==='SIGNED_OUT'||(event==='SIGNED_IN'&&user?.id!==session?.user?.id)){
+user=session?.user??null;setTimeout(load,0);
+}
+});
+db.auth.getSession().then(({data,error})=>{if(error)throw error;user=data.session?.user??null;return load();}).catch(e=>{say(errorText(e));$('auth').hidden=false;});
+}
+</script></body></html>
